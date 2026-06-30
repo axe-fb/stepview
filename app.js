@@ -379,8 +379,8 @@
     });
   }
 
-  // ==================== DEBUG HOOK (only when URL has ?debug — never ships in normal use) ====================
-  if (location.search.indexOf('debug') !== -1) {
+  // ==================== DEBUG (only when URL has ?debug — never ships in normal use) ====================
+  function setupDebug() {
     window.__sv = {
       simSteps: function (n) { for (var i = 0; i < (n || 1); i++) addStep(); },
       setSteps: function (n) { state.steps = n; render(); },
@@ -388,6 +388,39 @@
       grantPerms: function () { motionStatus = 'granted'; locationStatus = 'granted'; updatePermUI(); },
       state: state
     };
+
+    // Live diagnostic HUD — shows raw OS event delivery + signal strength
+    var hud = document.createElement('div');
+    hud.id = 'dbg-hud';
+    hud.style.cssText = 'position:fixed;top:4px;left:4px;z-index:9999;background:rgba(0,0,0,0.82);' +
+      'border:1px solid #00ff88;color:#00ff88;font:15px ui-monospace,Menlo,monospace;' +
+      'padding:7px 10px;border-radius:8px;white-space:pre;line-height:1.4;pointer-events:none;';
+    document.body.appendChild(hud);
+
+    var evt = 0, hz = [], peak = 0, cross = 0, hidden = 0, lastM = 0, lastD = 0, base = 9.81;
+    function renderHud() {
+      var now = (typeof performance !== 'undefined') ? performance.now() : 0;
+      while (hz.length && now - hz[0] > 1000) hz.shift();
+      hud.textContent =
+        'evt ' + evt + '   Hz ' + hz.length + '   run ' + (state.running ? 'Y' : 'N') + '\n' +
+        'mag ' + lastM.toFixed(2) + '   dyn ' + lastD.toFixed(2) + '\n' +
+        'peakDyn ' + peak.toFixed(2) + '   cross>1.4 ' + cross + '\n' +
+        'steps ' + state.steps + '   mAttach ' + (motionAttached ? 'Y' : 'N') + '\n' +
+        'hidden ' + hidden + '   vis ' + document.visibilityState + '   mStat ' + motionStatus;
+    }
+    // Independent listener: measures raw OS devicemotion delivery + signal,
+    // regardless of the app's running/attach state.
+    window.addEventListener('devicemotion', function (e) {
+      var a = e.accelerationIncludingGravity || e.acceleration; if (!a || a.x == null) return;
+      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      base = base * 0.9 + m * 0.1; var d = m - base;
+      evt++; lastM = m; lastD = d; if (d > peak) peak = d; if (d > 1.4) cross++;
+      hz.push((typeof performance !== 'undefined') ? performance.now() : 0);
+    });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) hidden++; });
+    setInterval(renderHud, 400);
+    renderHud();
+    window.__sv.dbgReset = function () { evt = 0; peak = 0; cross = 0; hz = []; renderHud(); };
   }
 
   // ==================== INIT ====================
@@ -398,6 +431,7 @@
     render();
     navigate('home');
     primePermissions();   // ask for motion + location as soon as the app loads
+    if (location.search.indexOf('debug') !== -1) setupDebug();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
