@@ -1,0 +1,184 @@
+:root {
+  --bg: #000000;             /* transparent on additive display — real world shows through */
+  --surface: #181a22;        /* header / cards — bright end of allowed range, reads as opaque */
+  --surface-2: #252834;      /* ghost buttons — brighter so they stay visible */
+  --text: #ffffff;           /* max brightness — most visible */
+  --text-2: #c6c6d2;         /* brightened secondary text for see-through legibility */
+  --cyan: #00d4ff;
+  --green: #00ff88;
+  --danger: #ff4466;
+  --focus: #00d4ff;
+  --focus-glow: rgba(0, 212, 255, 0.55);
+  --border: rgba(255, 255, 255, 0.16);          /* defines card shape on transparent canvas */
+  --border-strong: rgba(255, 255, 255, 0.32);   /* outlines ghost buttons so they read */
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 600px;
+  height: 600px;
+  overflow: hidden;
+  background: var(--bg);     /* transparent — do NOT rely on this for contrast */
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+#app { width: 100%; height: 100%; position: relative; }
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 8px;
+}
+.screen.hidden { display: none; }
+
+/* --- Header --- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  flex-shrink: 0;
+}
+.header h1 { font-size: 28px; font-weight: 800; flex: 1; }
+.status { font-size: 19px; font-weight: 700; color: var(--text-2); }
+.status.active { color: var(--green); }
+.back-btn {
+  background: var(--surface-2);
+  border: 2px solid var(--border-strong);
+  color: var(--text);
+  font-size: 26px;
+  padding: 4px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.back-btn:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 18px var(--focus-glow); }
+
+/* --- Content --- */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 0;
+}
+
+/* --- Step ring --- */
+.ring-wrap { position: relative; width: 216px; height: 216px; flex-shrink: 0; }
+.ring { transform: rotate(-90deg); }
+.ring-track { fill: none; stroke: var(--surface-2); stroke-width: 16; }
+.ring-prog {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 16;
+  stroke-linecap: round;
+  stroke-dasharray: 603;
+  stroke-dashoffset: 603;
+  transition: stroke-dashoffset 0.4s ease;
+}
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.ring-steps { font-size: 72px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.ring-label { font-size: 21px; color: var(--text-2); margin-top: 2px; }
+
+.goal-line { font-size: 21px; font-weight: 700; color: var(--text-2); }
+
+/* --- Distance / Calories --- */
+.cards { display: flex; gap: 12px; width: 100%; }
+.stat {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 14px 20px;
+}
+.stat-label { font-size: 19px; color: var(--text-2); margin-bottom: 2px; }
+.stat-value { font-size: 32px; font-weight: 800; color: var(--cyan); font-variant-numeric: tabular-nums; }
+.stat-value .unit { font-size: 19px; color: var(--text-2); font-weight: 700; }
+
+/* --- Action buttons --- */
+.actions { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; gap: 12px; }
+.btn {
+  flex: 1;
+  min-height: 84px;
+  border: 2px solid transparent;
+  border-radius: 18px;
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.btn.primary { background: var(--cyan); color: #001018; }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.ghost { background: var(--surface-2); color: var(--text); border-color: var(--border-strong); }
+.btn:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 28px var(--focus-glow); transform: scale(0.97); }
+.btn.wide { min-height: 66px; font-size: 22px; }
+
+/* --- Settings --- */
+.settings-content { justify-content: flex-start; gap: 14px; padding-top: 8px; }
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px 20px;
+}
+.set-info { flex: 1; }
+.set-label { font-size: 19px; color: var(--text-2); }
+.set-val { font-size: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.set-ctrl { display: flex; gap: 12px; }
+.step-btn {
+  width: 68px; height: 68px;
+  border: 2px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 32px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.step-btn:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 20px var(--focus-glow); }
+.set-note { font-size: 16px; color: var(--text-2); text-align: center; margin-top: 2px; }
+
+/* --- Toast --- */
+.toast {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-80px);
+  background: var(--surface);
+  border: 2px solid var(--cyan);
+  border-radius: 24px;
+  padding: 13px 30px;
+  font-size: 19px;
+  font-weight: 700;
+  opacity: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  z-index: 100;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+.hidden { display: none !important; }
