@@ -2,6 +2,7 @@
   'use strict';
 
   // ==================== CONFIG ====================
+  var BUILD = '7';                     // bump every deploy — shown on Debug screen to confirm version
   var STORAGE_KEY = 'stepview_v1';
   var RING_CIRC = 603;                 // 2*pi*r, r=96
   var KCAL_PER_KG_PER_KM = 0.9;        // gross walking estimate
@@ -38,6 +39,8 @@
   var accelBase = 9.81, peaked = false, lastStepTs = 0;
   var lastFix = null;
   var saveTick = 0;
+  // live diagnostics (Debug screen)
+  var dbg = { evt: 0, hz: [], peak: 0, cross: 0, hidden: 0, lastM: 0, lastD: 0 };
 
   // ==================== HELPERS ====================
   function $(id) { return document.getElementById(id); }
@@ -209,17 +212,16 @@
   }
 
   function updatePermUI() {
-    var banner = $('perm-banner');
-    if (!banner) return;
     var missing = [];
     if (motionStatus === 'denied' || motionStatus === 'unavailable') missing.push('Motion');
     if (locationStatus === 'denied') missing.push('Location');
-    var txt = $('perm-text');
-    if (missing.length) {
-      if (txt) txt.textContent = missing.join(' & ') + ' access needed — tap Grant';
-      banner.classList.remove('hidden');
-    } else {
-      banner.classList.add('hidden');
+    var show = missing.length > 0;
+    var msg = show ? (missing.join(' & ') + ' access needed — tap Grant') : '';
+    var banners = document.querySelectorAll('.perm-banner');   // home + settings
+    for (var i = 0; i < banners.length; i++) {
+      banners[i].classList.toggle('hidden', !show);
+      var t = banners[i].querySelector('.perm-text');
+      if (t) t.textContent = msg;
     }
   }
 
@@ -254,6 +256,7 @@
   function start() {
     if (state.running) return;
     state.running = true;
+    accelBase = 9.81; peaked = false; lastStepTs = 0;   // fresh calibration each session
     attachSensors();
     render();
     toast('Tracking started');
@@ -286,6 +289,9 @@
       case 'request-perms': primePermissions(); break;
       case 'reset': resetCounters(); break;
       case 'settings': navigate('settings'); break;
+      case 'debug': navigate('debug'); break;
+      case 'debug-close': navigate('settings'); break;
+      case 'dbg-reset': dbg.evt = 0; dbg.peak = 0; dbg.cross = 0; dbg.hidden = 0; dbg.hz = []; renderDebug(); break;
       case 'back': navigate('home'); save(); break;
       case 'goal-inc': state.settings.goal = clampGoal(state.settings.goal + 500); afterSetting(); break;
       case 'goal-dec': state.settings.goal = clampGoal(state.settings.goal - 500); afterSetting(); break;
@@ -303,6 +309,7 @@
     screens[id].classList.remove('hidden');
     currentScreen = id;
     if (id === 'settings') renderSettings();
+    if (id === 'debug') renderDebug();
     if (id === 'home') applyMinimized(); else focusFirst();
   }
   function applyMinimized() {
@@ -379,8 +386,48 @@
     });
   }
 
-  // ==================== DEBUG (only when URL has ?debug — never ships in normal use) ====================
-  function setupDebug() {
+  // ==================== DIAGNOSTICS (feeds the Debug screen) ====================
+  // Always-on, independent of the app's running/attach state, so the Debug
+  // screen shows the raw truth: are events arriving, how strong is the signal,
+  // and did the page ever go hidden.
+  function setupDiagnostics() {
+    var base = 9.81;
+    window.addEventListener('devicemotion', function (e) {
+      var a = e.accelerationIncludingGravity || e.acceleration; if (!a || a.x == null) return;
+      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      base = base * 0.9 + m * 0.1; var d = m - base;
+      dbg.evt++; dbg.lastM = m; dbg.lastD = d;
+      if (d > dbg.peak) dbg.peak = d;
+      if (d > STEP_THRESHOLD) dbg.cross++;
+      var t = (typeof performance !== 'undefined') ? performance.now() : 0;
+      dbg.hz.push(t); while (dbg.hz.length && t - dbg.hz[0] > 1000) dbg.hz.shift();
+    });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) dbg.hidden++; });
+    setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
+  }
+
+  function renderDebug() {
+    var el = $('dbg-readout'); if (!el) return;
+    var t = (typeof performance !== 'undefined') ? performance.now() : 0;
+    while (dbg.hz.length && t - dbg.hz[0] > 1000) dbg.hz.shift();
+    el.textContent =
+      'build     ' + BUILD + '\n' +
+      'events    ' + dbg.evt + '\n' +
+      'rate Hz   ' + dbg.hz.length + '\n' +
+      'running   ' + (state.running ? 'YES' : 'no') + '\n' +
+      'mAttach   ' + (motionAttached ? 'YES' : 'no') + '\n' +
+      'motionP   ' + motionStatus + '\n' +
+      'locP      ' + locationStatus + '\n' +
+      'mag       ' + dbg.lastM.toFixed(2) + '\n' +
+      'dyn       ' + dbg.lastD.toFixed(2) + '\n' +
+      'peakDyn   ' + dbg.peak.toFixed(2) + '  (thr ' + STEP_THRESHOLD + ')\n' +
+      'cross     ' + dbg.cross + '\n' +
+      'steps     ' + state.steps + '\n' +
+      'hidden    ' + dbg.hidden + '  vis ' + document.visibilityState;
+  }
+
+  // Test-only hooks for desktop preview, enabled with ?debug
+  function setupTestHooks() {
     window.__sv = {
       simSteps: function (n) { for (var i = 0; i < (n || 1); i++) addStep(); },
       setSteps: function (n) { state.steps = n; render(); },
@@ -388,39 +435,6 @@
       grantPerms: function () { motionStatus = 'granted'; locationStatus = 'granted'; updatePermUI(); },
       state: state
     };
-
-    // Live diagnostic HUD — shows raw OS event delivery + signal strength
-    var hud = document.createElement('div');
-    hud.id = 'dbg-hud';
-    hud.style.cssText = 'position:fixed;top:4px;left:4px;z-index:9999;background:rgba(0,0,0,0.82);' +
-      'border:1px solid #00ff88;color:#00ff88;font:15px ui-monospace,Menlo,monospace;' +
-      'padding:7px 10px;border-radius:8px;white-space:pre;line-height:1.4;pointer-events:none;';
-    document.body.appendChild(hud);
-
-    var evt = 0, hz = [], peak = 0, cross = 0, hidden = 0, lastM = 0, lastD = 0, base = 9.81;
-    function renderHud() {
-      var now = (typeof performance !== 'undefined') ? performance.now() : 0;
-      while (hz.length && now - hz[0] > 1000) hz.shift();
-      hud.textContent =
-        'evt ' + evt + '   Hz ' + hz.length + '   run ' + (state.running ? 'Y' : 'N') + '\n' +
-        'mag ' + lastM.toFixed(2) + '   dyn ' + lastD.toFixed(2) + '\n' +
-        'peakDyn ' + peak.toFixed(2) + '   cross>1.4 ' + cross + '\n' +
-        'steps ' + state.steps + '   mAttach ' + (motionAttached ? 'Y' : 'N') + '\n' +
-        'hidden ' + hidden + '   vis ' + document.visibilityState + '   mStat ' + motionStatus;
-    }
-    // Independent listener: measures raw OS devicemotion delivery + signal,
-    // regardless of the app's running/attach state.
-    window.addEventListener('devicemotion', function (e) {
-      var a = e.accelerationIncludingGravity || e.acceleration; if (!a || a.x == null) return;
-      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-      base = base * 0.9 + m * 0.1; var d = m - base;
-      evt++; lastM = m; lastD = d; if (d > peak) peak = d; if (d > 1.4) cross++;
-      hz.push((typeof performance !== 'undefined') ? performance.now() : 0);
-    });
-    document.addEventListener('visibilitychange', function () { if (document.hidden) hidden++; });
-    setInterval(renderHud, 400);
-    renderHud();
-    window.__sv.dbgReset = function () { evt = 0; peak = 0; cross = 0; hz = []; renderHud(); };
   }
 
   // ==================== INIT ====================
@@ -429,9 +443,10 @@
     load();
     setupEvents();
     render();
+    setupDiagnostics();
     navigate('home');
     primePermissions();   // ask for motion + location as soon as the app loads
-    if (location.search.indexOf('debug') !== -1) setupDebug();
+    if (location.search.indexOf('debug') !== -1) setupTestHooks();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

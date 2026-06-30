@@ -201,6 +201,17 @@ html, body {
 .step-btn:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 20px var(--focus-glow); }
 .set-note { font-size: 16px; color: var(--text-2); text-align: center; margin-top: 2px; }
 
+/* --- Debug screen --- */
+.debug-content { justify-content: flex-start; align-items: stretch; padding-top: 6px; }
+.dbg-readout {
+  width: 100%;
+  margin: 0;
+  font: 20px/1.45 ui-monospace, Menlo, monospace;
+  color: var(--green);
+  white-space: pre;
+  overflow: auto;
+}
+
 /* --- Toast --- */
 .toast {
   position: absolute;

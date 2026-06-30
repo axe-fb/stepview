@@ -6,7 +6,7 @@
   <meta name="description" content="StepView — step, distance, and calorie counter for Meta Ray-Ban Display glasses.">
   <meta name="mrbd-web-app-capable" content="yes">
   <title>StepView</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
   <div id="app">
@@ -75,6 +75,10 @@
         <button class="back-btn focusable" data-action="back" tabindex="0">&#8592;</button>
         <h1>Settings</h1>
       </header>
+      <div class="perm-banner hidden">
+        <span class="perm-text">Motion &amp; Location access needed</span>
+        <button class="perm-btn focusable" data-action="request-perms" tabindex="0">Grant</button>
+      </div>
       <div class="content settings-content">
         <div class="set-row">
           <div class="set-info"><div class="set-label">Step Goal</div><div class="set-val" id="set-goal">8,000</div></div>
@@ -101,12 +105,32 @@
       </div>
       <nav class="actions">
         <div class="row">
+          <button class="btn ghost wide focusable" data-action="debug" tabindex="0">Debug</button>
+        </div>
+        <div class="row">
           <button class="btn danger focusable" data-action="reset" tabindex="0">Reset</button>
           <button class="btn primary focusable" data-action="back" tabindex="0">Done</button>
         </div>
       </nav>
     </div>
+
+    <!-- DEBUG SCREEN -->
+    <div id="debug" class="screen hidden">
+      <header class="header">
+        <button class="back-btn focusable" data-action="debug-close" tabindex="0">&#8592;</button>
+        <h1>Debug</h1>
+      </header>
+      <div class="content debug-content">
+        <pre id="dbg-readout" class="dbg-readout">collecting…</pre>
+      </div>
+      <nav class="actions">
+        <div class="row">
+          <button class="btn ghost focusable" data-action="dbg-reset" tabindex="0">Reset Counters</button>
+          <button class="btn primary focusable" data-action="debug-close" tabindex="0">Done</button>
+        </div>
+      </nav>
+    </div>
   </div>
-  <script src="app.js"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
