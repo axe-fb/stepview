@@ -367,12 +367,16 @@
           break;
       }
     });
-    // Pause sensors when the app is hidden (battery); resume if still running.
-    document.addEventListener('visibilitychange', function () {
-      if (document.hidden) { if (state.running) detachSensors(); }
-      else { if (state.running) attachSensors(); }
-    });
+    // Do NOT detach sensors on visibilitychange: the glasses display sleeps
+    // while you walk (you're not looking at it), and detaching would drop
+    // devicemotion events and badly under-count steps. Tracking pauses only on
+    // an explicit Stop (toggle). Persist on pagehide.
     window.addEventListener('pagehide', save);
+    // Re-arm the watch if the OS dropped it while backgrounded, without ever
+    // detaching motion — keeps counting continuously while running.
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && state.running) attachSensors();
+    });
   }
 
   // ==================== DEBUG HOOK (only when URL has ?debug — never ships in normal use) ====================
