@@ -12,24 +12,24 @@
   <div id="app">
     <!-- MAIN SCREEN -->
     <div id="home" class="screen">
-      <header class="header">
-        <h1>StepView</h1>
-        <span class="status" id="status">Paused</span>
-      </header>
-
-      <div class="content">
-        <div class="ring-wrap">
-          <svg class="ring" viewBox="0 0 220 220" width="208" height="208" aria-hidden="true">
-            <circle class="ring-track" cx="110" cy="110" r="96"></circle>
-            <circle class="ring-prog" id="ring-prog" cx="110" cy="110" r="96"></circle>
-          </svg>
-          <div class="ring-center">
-            <div class="ring-steps" id="steps">0</div>
-            <div class="ring-label">steps</div>
+      <!-- FULL VIEW -->
+      <div class="full-view">
+        <div id="perm-banner" class="perm-banner hidden">
+          <span class="perm-text" id="perm-text">Motion &amp; Location access needed</span>
+          <button class="perm-btn focusable" data-action="request-perms" tabindex="0">Grant</button>
+        </div>
+        <div class="content">
+          <div class="ring-wrap">
+            <svg class="ring" viewBox="0 0 220 220" width="216" height="216" aria-hidden="true">
+              <circle class="ring-track" cx="110" cy="110" r="96"></circle>
+              <circle class="ring-prog" id="ring-prog" cx="110" cy="110" r="96"></circle>
+            </svg>
+            <div class="ring-center">
+              <div class="ring-steps" id="steps">0</div>
+              <div class="ring-label">steps</div>
+            </div>
           </div>
         </div>
-
-        <div class="goal-line" id="goal-line">Goal 8,000 &middot; 0%</div>
 
         <div class="cards">
           <div class="stat">
@@ -41,17 +41,32 @@
             <div class="stat-value"><span id="calories">0</span> <span class="unit">kcal</span></div>
           </div>
         </div>
+
+        <nav class="actions">
+          <div class="row controls">
+            <button id="toggle" class="btn primary focusable" data-action="toggle" aria-label="Start" tabindex="0">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="7,5 19,12 7,19" fill="currentColor"></polygon></svg>
+            </button>
+            <button class="btn ghost icon-btn focusable" data-action="minimize" aria-label="Minimize" tabindex="0">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"></line></svg>
+            </button>
+            <button class="btn ghost icon-btn focusable" data-action="settings" aria-label="Settings" tabindex="0">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+          </div>
+        </nav>
       </div>
 
-      <nav class="actions">
-        <div class="row">
-          <button class="btn primary focusable" data-action="start" tabindex="0">Start</button>
-          <button class="btn danger focusable" data-action="stop" tabindex="0">Stop</button>
+      <!-- MINIMIZED VIEW -->
+      <div class="min-view hidden">
+        <div class="min-count">
+          <span class="boot-emoji" aria-hidden="true">🦶</span>
+          <div id="steps-min">0</div>
         </div>
-        <div class="row">
-          <button class="btn ghost wide focusable" data-action="settings" tabindex="0">Settings</button>
-        </div>
-      </nav>
+        <button class="btn ghost icon-btn focusable" data-action="maximize" aria-label="Maximize" tabindex="0">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+        </button>
+      </div>
     </div>
 
     <!-- SETTINGS / GOAL SCREEN -->

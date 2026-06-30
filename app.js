@@ -12,9 +12,16 @@
   var GPS_MIN_SEG = 1;                 // m — ignore jitter below this
   var GPS_MAX_SEG = 60;                // m — ignore impossible jumps
 
+  // Inline SVG icons (no network — per display guidelines)
+  var ICON = {
+    play: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><polygon points="7,5 19,12 7,19" fill="currentColor"></polygon></svg>',
+    stop: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"></rect></svg>'
+  };
+
   // ==================== STATE ====================
   var state = {
     running: false,
+    minimized: false,
     steps: 0,
     gpsDistM: 0,        // distance from accepted GPS segments
     gpsSegments: 0,     // count of accepted GPS segments (>0 => trust GPS)
@@ -27,6 +34,7 @@
 
   // sensor runtime
   var motionAttached = false, watchId = null;
+  var motionStatus = 'unknown', locationStatus = 'unknown';   // unknown|granted|denied|unavailable
   var accelBase = 9.81, peaked = false, lastStepTs = 0;
   var lastFix = null;
   var saveTick = 0;
@@ -64,6 +72,7 @@
         state.gpsDistM = d.gpsDistM || 0;
         state.gpsSegments = d.gpsSegments || 0;
         state.lastReset = d.lastReset || '';
+        // Note: minimized is intentionally NOT restored — always launch maximized.
       }
     } catch (e) { /* ignore */ }
     // Daily auto-reset
@@ -77,7 +86,7 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         steps: state.steps, gpsDistM: state.gpsDistM, gpsSegments: state.gpsSegments,
-        settings: state.settings, lastReset: state.lastReset
+        minimized: state.minimized, settings: state.settings, lastReset: state.lastReset
       }));
     } catch (e) { /* ignore */ }
   }
@@ -92,14 +101,31 @@
     stepsEl.textContent = txt;
     // Auto-scale so large counts (e.g. 12,345) stay inside the ring
     stepsEl.style.fontSize = (txt.length <= 3 ? 72 : txt.length <= 5 ? 58 : txt.length <= 6 ? 48 : 40) + 'px';
-    $('goal-line').innerHTML = 'Goal ' + fmtInt(goal) + ' · ' + Math.round(pct) + '%';
+    var gl = $('goal-line');
+    if (gl) gl.innerHTML = 'Goal ' + fmtInt(goal) + ' · ' + Math.round(pct) + '%';
     $('ring-prog').style.strokeDashoffset = (RING_CIRC * (1 - pct / 100)).toFixed(1);
     $('distance').textContent = distKm().toFixed(2);
     $('calories').textContent = fmtInt(calories());
 
     var st = $('status');
-    st.textContent = state.running ? 'Active' : 'Paused';
-    st.classList.toggle('active', state.running);
+    if (st) {
+      st.textContent = state.running ? 'Active' : 'Paused';
+      st.classList.toggle('active', state.running);
+    }
+
+    var tg = $('toggle');
+    if (tg) {
+      tg.innerHTML = state.running ? ICON.stop : ICON.play;
+      tg.classList.toggle('danger', state.running);
+      tg.classList.toggle('primary', !state.running);
+      tg.setAttribute('aria-label', state.running ? 'Stop' : 'Start');
+    }
+
+    var smin = $('steps-min');
+    if (smin) {
+      smin.textContent = txt;
+      smin.style.fontSize = (txt.length <= 3 ? 120 : txt.length <= 5 ? 96 : txt.length <= 6 ? 80 : 64) + 'px';
+    }
   }
 
   function renderSettings() {
@@ -134,6 +160,7 @@
 
   // ==================== GEOLOCATION ====================
   function onPos(p) {
+    locationStatus = 'granted'; updatePermUI();
     if (!state.running) return;
     var c = p.coords;
     if (lastFix && c.accuracy <= GPS_MAX_ACCURACY) {
@@ -148,22 +175,69 @@
     lastFix = { lat: c.latitude, lon: c.longitude };
   }
   function onGeoErr(err) {
-    // Non-fatal: app falls back to step-estimated distance.
-    if (err && err.code === 1) toast('Location denied — using steps');
+    // Permission denied -> show error; other errors fall back to step-estimated distance.
+    if (err && err.code === 1) { locationStatus = 'denied'; updatePermUI(); }
+  }
+
+  // ==================== PERMISSIONS ====================
+  function requestMotionPermission() {
+    return new Promise(function (resolve) {
+      if (typeof DeviceMotionEvent === 'undefined') { resolve('unavailable'); return; }
+      if (typeof DeviceMotionEvent.requestPermission !== 'function') { resolve('granted'); return; }
+      DeviceMotionEvent.requestPermission()
+        .then(function (r) { resolve(r === 'granted' ? 'granted' : 'denied'); })
+        .catch(function () { resolve('denied'); });   // e.g. requires a user gesture
+    });
+  }
+
+  // Ask for motion + location as soon as the app loads (and again via the Grant button).
+  function primePermissions() {
+    if ('geolocation' in navigator) {
+      try {
+        navigator.geolocation.getCurrentPosition(
+          function () { locationStatus = 'granted'; updatePermUI(); if (state.running) attachSensors(); },
+          function (err) { if (err && err.code === 1) { locationStatus = 'denied'; updatePermUI(); } },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+      } catch (e) { /* ignore */ }
+    } else {
+      locationStatus = 'unavailable';
+    }
+    requestMotionPermission().then(function (s) {
+      motionStatus = s; updatePermUI();
+      if (s === 'granted' && state.running) attachSensors();
+    });
+  }
+
+  function updatePermUI() {
+    var banner = $('perm-banner');
+    if (!banner) return;
+    var missing = [];
+    if (motionStatus === 'denied' || motionStatus === 'unavailable') missing.push('Motion');
+    if (locationStatus === 'denied') missing.push('Location');
+    var txt = $('perm-text');
+    if (missing.length) {
+      if (txt) txt.textContent = missing.join(' & ') + ' access needed — tap Grant';
+      banner.classList.remove('hidden');
+    } else {
+      banner.classList.add('hidden');
+    }
   }
 
   // ==================== SENSOR LIFECYCLE ====================
   function attachSensors() {
-    if (motionAttached) return;
-    if (typeof DeviceMotionEvent !== 'undefined' &&
-        typeof DeviceMotionEvent.requestPermission === 'function') {
-      DeviceMotionEvent.requestPermission().then(function (r) {
-        if (r === 'granted') { window.addEventListener('devicemotion', onMotion); motionAttached = true; }
-        else toast('Motion permission denied');
-      }).catch(function () { window.addEventListener('devicemotion', onMotion); motionAttached = true; });
-    } else {
-      window.addEventListener('devicemotion', onMotion);
-      motionAttached = true;
+    if (!motionAttached) {
+      if (motionStatus === 'granted') {
+        window.addEventListener('devicemotion', onMotion);
+        motionAttached = true;
+      } else if (motionStatus !== 'unavailable') {
+        // Obtain it now — works when called from a user gesture (Start / Grant)
+        requestMotionPermission().then(function (s) {
+          motionStatus = s; updatePermUI();
+          if (s === 'granted' && !motionAttached) {
+            window.addEventListener('devicemotion', onMotion); motionAttached = true;
+          }
+        });
+      }
     }
     if ('geolocation' in navigator && watchId === null) {
       lastFix = null;
@@ -206,8 +280,10 @@
 
   function handleAction(action) {
     switch (action) {
-      case 'start': start(); break;
-      case 'stop': stop(); break;
+      case 'toggle': if (state.running) stop(); else start(); break;
+      case 'minimize': setMinimized(true); break;
+      case 'maximize': setMinimized(false); break;
+      case 'request-perms': primePermissions(); break;
       case 'reset': resetCounters(); break;
       case 'settings': navigate('settings'); break;
       case 'back': navigate('home'); save(); break;
@@ -227,11 +303,26 @@
     screens[id].classList.remove('hidden');
     currentScreen = id;
     if (id === 'settings') renderSettings();
+    if (id === 'home') applyMinimized(); else focusFirst();
+  }
+  function applyMinimized() {
+    var full = document.querySelector('#home .full-view');
+    var min = document.querySelector('#home .min-view');
+    if (!full || !min) return;
+    full.classList.toggle('hidden', state.minimized);
+    min.classList.toggle('hidden', !state.minimized);
     focusFirst();
+  }
+  function setMinimized(b) {
+    state.minimized = b;
+    applyMinimized();
+    render();
+    save();
   }
   function focusables() {
     return Array.prototype.slice.call(
-      screens[currentScreen].querySelectorAll('.focusable:not([disabled])'));
+      screens[currentScreen].querySelectorAll('.focusable:not([disabled])'))
+      .filter(function (el) { return el.offsetParent !== null; });   // visible only
   }
   function focusFirst() { var f = focusables(); if (f.length) f[0].focus(); }
   function moveFocus(dir) {
@@ -284,13 +375,16 @@
     window.addEventListener('pagehide', save);
   }
 
-  // ==================== DEBUG HOOK (browser preview only) ====================
-  window.__sv = {
-    simSteps: function (n) { for (var i = 0; i < (n || 1); i++) addStep(); },
-    setSteps: function (n) { state.steps = n; render(); },
-    addGps: function (km) { state.gpsDistM += km * 1000; state.gpsSegments++; render(); },
-    state: state
-  };
+  // ==================== DEBUG HOOK (only when URL has ?debug — never ships in normal use) ====================
+  if (location.search.indexOf('debug') !== -1) {
+    window.__sv = {
+      simSteps: function (n) { for (var i = 0; i < (n || 1); i++) addStep(); },
+      setSteps: function (n) { state.steps = n; render(); },
+      addGps: function (km) { state.gpsDistM += km * 1000; state.gpsSegments++; render(); },
+      grantPerms: function () { motionStatus = 'granted'; locationStatus = 'granted'; updatePermUI(); },
+      state: state
+    };
+  }
 
   // ==================== INIT ====================
   function init() {
@@ -299,6 +393,7 @@
     setupEvents();
     render();
     navigate('home');
+    primePermissions();   // ask for motion + location as soon as the app loads
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
