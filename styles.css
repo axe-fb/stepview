@@ -203,14 +203,16 @@ html, body {
 
 /* --- Debug screen --- */
 .debug-content { justify-content: flex-start; align-items: stretch; padding-top: 6px; }
-.dbg-readout {
-  width: 100%;
-  margin: 0;
-  font: 20px/1.45 ui-monospace, Menlo, monospace;
-  color: var(--green);
-  white-space: pre;
-  overflow: auto;
+.dbg-readout { width: 100%; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+.dbg-row {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 3px 10px; border-radius: 8px; background: var(--surface);
 }
+.dbg-k { font-size: 16px; color: var(--text-2); }
+.dbg-v { font-size: 19px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.dbg-v.big { font-size: 26px; font-weight: 800; color: #ffffff; }
+.dbg-v.ok { color: var(--green); }
+.dbg-v.bad { color: var(--danger); }
 
 /* --- Toast --- */
 .toast {

@@ -2,7 +2,7 @@
   'use strict';
 
   // ==================== CONFIG ====================
-  var BUILD = '8';                     // bump every deploy — shown on Debug screen to confirm version
+  var BUILD = '9';                     // bump every deploy — shown on Debug screen to confirm version
   var STORAGE_KEY = 'stepview_v1';
   var RING_CIRC = 603;                 // 2*pi*r, r=96
   var KCAL_PER_KG_PER_KM = 0.9;        // gross walking estimate
@@ -34,7 +34,7 @@
   var currentScreen = 'home';
 
   // sensor runtime
-  var watchId = null, motionListening = false;
+  var watchId = null, motionAttached = false, seedGravity = false;
   var motionStatus = 'unknown', locationStatus = 'unknown';   // unknown|granted|denied|unavailable
   var gravity = 9.8, env = 0, peaked = false, lastStepTs = 0;
   var lastFix = null;
@@ -139,8 +139,8 @@
   }
 
   // ==================== STEP DETECTION ====================
-  // Always attached (see setupMotion): keeps the gravity baseline + detector live
-  // continuously so Start/Stop only gates COUNTING — no attach/detach races.
+  // Attached only while tracking or on the Debug screen (see syncMotion).
+  // Counts only while running; always feeds the diagnostics.
   function onMotion(e) {
     var a = e.accelerationIncludingGravity || e.acceleration;
     if (!a || a.x == null) return;
@@ -151,8 +151,9 @@
     dbg.evt++; dbg.lastM = m;
     dbg.hz.push(now); while (dbg.hz.length && now - dbg.hz[0] > 1000) dbg.hz.shift();
 
-    // slow gravity baseline — does NOT chase the ~2 Hz walking wave
-    gravity = gravity * 0.98 + m * 0.02;
+    // seed baseline from the first sample after (re)attach, then track slowly
+    if (seedGravity) { gravity = m; seedGravity = false; }
+    else gravity = gravity * 0.98 + m * 0.02;   // slow — does NOT chase the ~2 Hz walking wave
     var dyn = m - gravity;
     var adyn = dyn < 0 ? -dyn : dyn;
     // envelope of recent peak amplitude -> adaptive threshold (auto-scales to gait)
@@ -240,10 +241,22 @@
   // and step detector stay live continuously. Start/Stop only toggles counting
   // and the GPS watch. This removes the attach/detach races that made repeated
   // Start/Stop cycles unreliable.
-  function setupMotion() {
+  function attachMotion() {
+    if (motionAttached) return;                                   // idempotent — never double-attach
+    seedGravity = true; env = 0; peaked = false; lastStepTs = 0;  // fresh detector on (re)attach
     window.addEventListener('devicemotion', onMotion);
-    motionListening = true;
-    setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
+    motionAttached = true;
+  }
+  function detachMotion() {
+    if (!motionAttached) return;
+    window.removeEventListener('devicemotion', onMotion);
+    motionAttached = false;
+  }
+  // Converge the listener to the current need — attached while tracking or while
+  // the Debug screen is open. Synchronous + idempotent + state-driven, so no
+  // ordering of Start/Stop/navigate can leave it in the wrong state.
+  function syncMotion() {
+    if (state.running || currentScreen === 'debug') attachMotion(); else detachMotion();
   }
   function ensureMotionPermission() {
     if (motionStatus === 'granted' || motionStatus === 'unavailable') return;
@@ -264,7 +277,8 @@
   function start() {
     if (state.running) return;      // guard: no double-start
     state.running = true;
-    ensureMotionPermission();       // motion listener is already on; just ensure permission
+    ensureMotionPermission();
+    syncMotion();                   // attach accelerometer
     startGeo();
     render();
     toast('Tracking started');
@@ -272,6 +286,7 @@
   function stop() {
     if (!state.running) return;     // guard: no double-stop
     state.running = false;
+    syncMotion();                   // detach accelerometer (unless Debug screen is open)
     stopGeo();
     save();
     render();
@@ -316,6 +331,7 @@
     Object.keys(screens).forEach(function (k) { screens[k].classList.add('hidden'); });
     screens[id].classList.remove('hidden');
     currentScreen = id;
+    syncMotion();     // attach motion for the Debug screen; detach on leave (if stopped)
     if (id === 'settings') renderSettings();
     if (id === 'debug') renderDebug();
     if (id === 'home') applyMinimized(); else focusFirst();
@@ -400,20 +416,24 @@
     var el = $('dbg-readout'); if (!el) return;
     var t = (typeof performance !== 'undefined') ? performance.now() : 0;
     while (dbg.hz.length && t - dbg.hz[0] > 1000) dbg.hz.shift();
-    el.textContent =
-      'build     ' + BUILD + '\n' +
-      'events    ' + dbg.evt + '\n' +
-      'rate Hz   ' + dbg.hz.length + '\n' +
-      'running   ' + (state.running ? 'YES' : 'no') + '\n' +
-      'motionOn  ' + (motionListening ? 'YES' : 'no') + '\n' +
-      'motionP   ' + motionStatus + '\n' +
-      'locP      ' + locationStatus + '\n' +
-      'mag       ' + dbg.lastM.toFixed(2) + '\n' +
-      'dyn       ' + dbg.lastD.toFixed(2) + '\n' +
-      'peakDyn   ' + dbg.peak.toFixed(2) + '  thr ' + dbg.thr.toFixed(2) + '\n' +
-      'cross     ' + dbg.cross + '\n' +
-      'steps     ' + state.steps + '\n' +
-      'hidden    ' + dbg.hidden + '  vis ' + document.visibilityState;
+    var hz = dbg.hz.length;
+    function row(k, v, cls) {
+      return '<div class="dbg-row"><span class="dbg-k">' + k + '</span>' +
+             '<span class="dbg-v ' + (cls || '') + '">' + v + '</span></div>';
+    }
+    // green/red ONLY for status; key numbers are highlighted white (.big)
+    function perm(s) { return s === 'granted' ? 'ok' : (s === 'denied' || s === 'unavailable') ? 'bad' : ''; }
+    el.innerHTML =
+      row('build', BUILD) +
+      row('running', state.running ? 'YES' : 'no', state.running ? 'ok' : 'bad') +
+      row('motion perm', motionStatus, perm(motionStatus)) +
+      row('location perm', locationStatus, perm(locationStatus)) +
+      row('rate', hz + ' Hz', (hz > 0 ? 'ok' : 'bad') + ' big') +
+      row('steps', state.steps, 'big') +
+      row('cross', dbg.cross, 'big') +
+      row('peakDyn', dbg.peak.toFixed(2), 'big') +
+      row('thr', dbg.thr.toFixed(2), 'big') +
+      row('hidden', dbg.hidden, dbg.hidden > 0 ? 'bad' : '');
   }
 
   // Test-only hooks for desktop preview, enabled with ?debug
@@ -433,9 +453,9 @@
     load();
     setupEvents();
     render();
-    setupMotion();        // attach the always-on accelerometer listener + debug refresh
-    navigate('home');
+    navigate('home');     // also runs syncMotion() for the initial screen
     primePermissions();   // ask for motion + location as soon as the app loads
+    setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
     if (location.search.indexOf('debug') !== -1) setupTestHooks();
   }
 
