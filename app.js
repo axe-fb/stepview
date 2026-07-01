@@ -2,12 +2,12 @@
   'use strict';
 
   // ==================== CONFIG ====================
-  var BUILD = '7';                     // bump every deploy — shown on Debug screen to confirm version
+  var BUILD = '8';                     // bump every deploy — shown on Debug screen to confirm version
   var STORAGE_KEY = 'stepview_v1';
   var RING_CIRC = 603;                 // 2*pi*r, r=96
   var KCAL_PER_KG_PER_KM = 0.9;        // gross walking estimate
-  var STEP_THRESHOLD = 1.4;            // m/s^2 dynamic accel for a step peak
-  var STEP_RESET = 0.4;                // must fall below this to re-arm
+  var STEP_MIN_THR = 0.5;              // adaptive-threshold floor (m/s^2) — noise gate
+  var STEP_ENV_FRAC = 0.4;             // step threshold = this * recent peak envelope
   var STEP_MIN_INTERVAL = 250;         // ms between steps (cap ~4/s)
   var GPS_MAX_ACCURACY = 30;           // m — ignore fixes worse than this
   var GPS_MIN_SEG = 1;                 // m — ignore jitter below this
@@ -34,13 +34,13 @@
   var currentScreen = 'home';
 
   // sensor runtime
-  var motionAttached = false, watchId = null;
+  var watchId = null, motionListening = false;
   var motionStatus = 'unknown', locationStatus = 'unknown';   // unknown|granted|denied|unavailable
-  var accelBase = 9.81, peaked = false, lastStepTs = 0;
+  var gravity = 9.8, env = 0, peaked = false, lastStepTs = 0;
   var lastFix = null;
   var saveTick = 0;
   // live diagnostics (Debug screen)
-  var dbg = { evt: 0, hz: [], peak: 0, cross: 0, hidden: 0, lastM: 0, lastD: 0 };
+  var dbg = { evt: 0, hz: [], peak: 0, cross: 0, hidden: 0, lastM: 0, lastD: 0, thr: 0 };
 
   // ==================== HELPERS ====================
   function $(id) { return document.getElementById(id); }
@@ -139,20 +139,33 @@
   }
 
   // ==================== STEP DETECTION ====================
+  // Always attached (see setupMotion): keeps the gravity baseline + detector live
+  // continuously so Start/Stop only gates COUNTING — no attach/detach races.
   function onMotion(e) {
-    if (!state.running) return;
     var a = e.accelerationIncludingGravity || e.acceleration;
     if (!a || a.x == null) return;
     var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    accelBase = accelBase * 0.9 + m * 0.1;      // slow baseline ~ gravity
-    var dyn = m - accelBase;                      // high-pass component
-    var now = (typeof performance !== 'undefined' ? performance.now() : new Date().getTime());
-    if (dyn > STEP_THRESHOLD && !peaked && (now - lastStepTs) > STEP_MIN_INTERVAL) {
-      addStep();
-      lastStepTs = now;
-      peaked = true;
+    var now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+
+    // diagnostics: event delivery
+    dbg.evt++; dbg.lastM = m;
+    dbg.hz.push(now); while (dbg.hz.length && now - dbg.hz[0] > 1000) dbg.hz.shift();
+
+    // slow gravity baseline — does NOT chase the ~2 Hz walking wave
+    gravity = gravity * 0.98 + m * 0.02;
+    var dyn = m - gravity;
+    var adyn = dyn < 0 ? -dyn : dyn;
+    // envelope of recent peak amplitude -> adaptive threshold (auto-scales to gait)
+    env = adyn > env ? adyn : env * 0.95;
+    var thr = env * STEP_ENV_FRAC; if (thr < STEP_MIN_THR) thr = STEP_MIN_THR;
+    dbg.lastD = dyn; dbg.thr = thr; if (dyn > dbg.peak) dbg.peak = dyn;
+
+    if (dyn > thr && !peaked && (now - lastStepTs) > STEP_MIN_INTERVAL) {
+      peaked = true; lastStepTs = now;
+      dbg.cross++;
+      if (state.running) addStep();          // COUNT only while tracking
     }
-    if (dyn < STEP_RESET) peaked = false;
+    if (dyn < thr * 0.5) peaked = false;     // re-arm when signal drops
   }
 
   function addStep() {
@@ -198,17 +211,14 @@
     if ('geolocation' in navigator) {
       try {
         navigator.geolocation.getCurrentPosition(
-          function () { locationStatus = 'granted'; updatePermUI(); if (state.running) attachSensors(); },
+          function () { locationStatus = 'granted'; updatePermUI(); if (state.running) startGeo(); },
           function (err) { if (err && err.code === 1) { locationStatus = 'denied'; updatePermUI(); } },
           { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
       } catch (e) { /* ignore */ }
     } else {
       locationStatus = 'unavailable';
     }
-    requestMotionPermission().then(function (s) {
-      motionStatus = s; updatePermUI();
-      if (s === 'granted' && state.running) attachSensors();
-    });
+    requestMotionPermission().then(function (s) { motionStatus = s; updatePermUI(); });
   }
 
   function updatePermUI() {
@@ -226,52 +236,50 @@
   }
 
   // ==================== SENSOR LIFECYCLE ====================
-  function attachSensors() {
-    if (!motionAttached) {
-      if (motionStatus === 'granted') {
-        window.addEventListener('devicemotion', onMotion);
-        motionAttached = true;
-      } else if (motionStatus !== 'unavailable') {
-        // Obtain it now — works when called from a user gesture (Start / Grant)
-        requestMotionPermission().then(function (s) {
-          motionStatus = s; updatePermUI();
-          if (s === 'granted' && !motionAttached) {
-            window.addEventListener('devicemotion', onMotion); motionAttached = true;
-          }
-        });
-      }
-    }
-    if ('geolocation' in navigator && watchId === null) {
+  // Motion listener is attached ONCE and never removed, so the gravity baseline
+  // and step detector stay live continuously. Start/Stop only toggles counting
+  // and the GPS watch. This removes the attach/detach races that made repeated
+  // Start/Stop cycles unreliable.
+  function setupMotion() {
+    window.addEventListener('devicemotion', onMotion);
+    motionListening = true;
+    setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
+  }
+  function ensureMotionPermission() {
+    if (motionStatus === 'granted' || motionStatus === 'unavailable') return;
+    requestMotionPermission().then(function (s) { motionStatus = s; updatePermUI(); });
+  }
+  function startGeo() {
+    if ('geolocation' in navigator && watchId === null) {   // guard: never double-start
       lastFix = null;
       watchId = navigator.geolocation.watchPosition(onPos, onGeoErr,
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
     }
   }
-  function detachSensors() {
-    if (motionAttached) { window.removeEventListener('devicemotion', onMotion); motionAttached = false; }
+  function stopGeo() {
     if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   }
 
   // ==================== ACTIONS ====================
   function start() {
-    if (state.running) return;
+    if (state.running) return;      // guard: no double-start
     state.running = true;
-    accelBase = 9.81; peaked = false; lastStepTs = 0;   // fresh calibration each session
-    attachSensors();
+    ensureMotionPermission();       // motion listener is already on; just ensure permission
+    startGeo();
     render();
     toast('Tracking started');
   }
   function stop() {
-    if (!state.running) return;
+    if (!state.running) return;     // guard: no double-stop
     state.running = false;
-    detachSensors();
+    stopGeo();
     save();
     render();
     toast('Paused');
   }
   function resetCounters() {
     state.steps = 0; state.gpsDistM = 0; state.gpsSegments = 0;
-    lastFix = null; accelBase = 9.81; peaked = false;
+    lastFix = null; peaked = false;
     save();
     render();
     toast('Reset');
@@ -379,33 +387,15 @@
     // devicemotion events and badly under-count steps. Tracking pauses only on
     // an explicit Stop (toggle). Persist on pagehide.
     window.addEventListener('pagehide', save);
-    // Re-arm the watch if the OS dropped it while backgrounded, without ever
-    // detaching motion — keeps counting continuously while running.
+    // Count "hidden" events for diagnostics; re-arm the GPS watch on return
+    // (motion is always attached, so it is never touched here).
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && state.running) attachSensors();
+      if (document.hidden) dbg.hidden++;
+      else if (state.running) startGeo();
     });
   }
 
-  // ==================== DIAGNOSTICS (feeds the Debug screen) ====================
-  // Always-on, independent of the app's running/attach state, so the Debug
-  // screen shows the raw truth: are events arriving, how strong is the signal,
-  // and did the page ever go hidden.
-  function setupDiagnostics() {
-    var base = 9.81;
-    window.addEventListener('devicemotion', function (e) {
-      var a = e.accelerationIncludingGravity || e.acceleration; if (!a || a.x == null) return;
-      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-      base = base * 0.9 + m * 0.1; var d = m - base;
-      dbg.evt++; dbg.lastM = m; dbg.lastD = d;
-      if (d > dbg.peak) dbg.peak = d;
-      if (d > STEP_THRESHOLD) dbg.cross++;
-      var t = (typeof performance !== 'undefined') ? performance.now() : 0;
-      dbg.hz.push(t); while (dbg.hz.length && t - dbg.hz[0] > 1000) dbg.hz.shift();
-    });
-    document.addEventListener('visibilitychange', function () { if (document.hidden) dbg.hidden++; });
-    setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
-  }
-
+  // ==================== DEBUG SCREEN READOUT ====================
   function renderDebug() {
     var el = $('dbg-readout'); if (!el) return;
     var t = (typeof performance !== 'undefined') ? performance.now() : 0;
@@ -415,12 +405,12 @@
       'events    ' + dbg.evt + '\n' +
       'rate Hz   ' + dbg.hz.length + '\n' +
       'running   ' + (state.running ? 'YES' : 'no') + '\n' +
-      'mAttach   ' + (motionAttached ? 'YES' : 'no') + '\n' +
+      'motionOn  ' + (motionListening ? 'YES' : 'no') + '\n' +
       'motionP   ' + motionStatus + '\n' +
       'locP      ' + locationStatus + '\n' +
       'mag       ' + dbg.lastM.toFixed(2) + '\n' +
       'dyn       ' + dbg.lastD.toFixed(2) + '\n' +
-      'peakDyn   ' + dbg.peak.toFixed(2) + '  (thr ' + STEP_THRESHOLD + ')\n' +
+      'peakDyn   ' + dbg.peak.toFixed(2) + '  thr ' + dbg.thr.toFixed(2) + '\n' +
       'cross     ' + dbg.cross + '\n' +
       'steps     ' + state.steps + '\n' +
       'hidden    ' + dbg.hidden + '  vis ' + document.visibilityState;
@@ -443,7 +433,7 @@
     load();
     setupEvents();
     render();
-    setupDiagnostics();
+    setupMotion();        // attach the always-on accelerometer listener + debug refresh
     navigate('home');
     primePermissions();   // ask for motion + location as soon as the app loads
     if (location.search.indexOf('debug') !== -1) setupTestHooks();
