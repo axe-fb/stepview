@@ -2,7 +2,7 @@
   'use strict';
 
   // ==================== CONFIG ====================
-  var BUILD = '9';                     // bump every deploy — shown on Debug screen to confirm version
+  var BUILD = '10';                    // bump every deploy — shown on Debug screen to confirm version
   var STORAGE_KEY = 'stepview_v1';
   var RING_CIRC = 603;                 // 2*pi*r, r=96
   var KCAL_PER_KG_PER_KM = 0.9;        // gross walking estimate
@@ -75,13 +75,15 @@
         state.gpsDistM = d.gpsDistM || 0;
         state.gpsSegments = d.gpsSegments || 0;
         state.lastReset = d.lastReset || '';
+        state.running = !!d.running;   // resume tracking after an unexpected reload
         // Note: minimized is intentionally NOT restored — always launch maximized.
       }
     } catch (e) { /* ignore */ }
-    // Daily auto-reset
+    // Daily auto-reset (also drops a stale cross-day running session)
     if (state.lastReset !== today()) {
       state.steps = 0; state.gpsDistM = 0; state.gpsSegments = 0;
       state.lastReset = today();
+      state.running = false;   // don't silently resume a session from a previous day
       save();
     }
   }
@@ -89,7 +91,7 @@
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         steps: state.steps, gpsDistM: state.gpsDistM, gpsSegments: state.gpsSegments,
-        minimized: state.minimized, settings: state.settings, lastReset: state.lastReset
+        running: state.running, minimized: state.minimized, settings: state.settings, lastReset: state.lastReset
       }));
     } catch (e) { /* ignore */ }
   }
@@ -139,8 +141,8 @@
   }
 
   // ==================== STEP DETECTION ====================
-  // Attached only while tracking or on the Debug screen (see syncMotion).
-  // Counts only while running; always feeds the diagnostics.
+  // Always attached (see setupMotion) — the detector + gravity baseline run
+  // continuously, independent of the UI. Steps are ADDED only while running.
   function onMotion(e) {
     var a = e.accelerationIncludingGravity || e.acceleration;
     if (!a || a.x == null) return;
@@ -151,7 +153,7 @@
     dbg.evt++; dbg.lastM = m;
     dbg.hz.push(now); while (dbg.hz.length && now - dbg.hz[0] > 1000) dbg.hz.shift();
 
-    // seed baseline from the first sample after (re)attach, then track slowly
+    // seed baseline from the very first sample, then track slowly
     if (seedGravity) { gravity = m; seedGravity = false; }
     else gravity = gravity * 0.98 + m * 0.02;   // slow — does NOT chase the ~2 Hz walking wave
     var dyn = m - gravity;
@@ -237,26 +239,16 @@
   }
 
   // ==================== SENSOR LIFECYCLE ====================
-  // Motion listener is attached ONCE and never removed, so the gravity baseline
-  // and step detector stay live continuously. Start/Stop only toggles counting
-  // and the GPS watch. This removes the attach/detach races that made repeated
-  // Start/Stop cycles unreliable.
-  function attachMotion() {
-    if (motionAttached) return;                                   // idempotent — never double-attach
-    seedGravity = true; env = 0; peaked = false; lastStepTs = 0;  // fresh detector on (re)attach
+  // The accelerometer is captured ALWAYS (attached once at init, never detached),
+  // so the gravity baseline + step detector run continuously and step capture is
+  // fully independent of the UI — screens, minimize, and Start/Stop never touch
+  // it. Steps are only ADDED while state.running (see onMotion). GPS is the
+  // battery-heavy part, so it alone is gated to running via start/stop.
+  function setupMotion() {
+    if (motionAttached) return;
+    seedGravity = true;
     window.addEventListener('devicemotion', onMotion);
     motionAttached = true;
-  }
-  function detachMotion() {
-    if (!motionAttached) return;
-    window.removeEventListener('devicemotion', onMotion);
-    motionAttached = false;
-  }
-  // Converge the listener to the current need — attached while tracking or while
-  // the Debug screen is open. Synchronous + idempotent + state-driven, so no
-  // ordering of Start/Stop/navigate can leave it in the wrong state.
-  function syncMotion() {
-    if (state.running || currentScreen === 'debug') attachMotion(); else detachMotion();
   }
   function ensureMotionPermission() {
     if (motionStatus === 'granted' || motionStatus === 'unavailable') return;
@@ -277,16 +269,15 @@
   function start() {
     if (state.running) return;      // guard: no double-start
     state.running = true;
-    ensureMotionPermission();
-    syncMotion();                   // attach accelerometer
-    startGeo();
+    ensureMotionPermission();       // motion capture is already always-on
+    startGeo();                     // GPS is the only thing we start here
+    save();                         // persist running so an unexpected reload auto-resumes
     render();
     toast('Tracking started');
   }
   function stop() {
     if (!state.running) return;     // guard: no double-stop
     state.running = false;
-    syncMotion();                   // detach accelerometer (unless Debug screen is open)
     stopGeo();
     save();
     render();
@@ -331,7 +322,6 @@
     Object.keys(screens).forEach(function (k) { screens[k].classList.add('hidden'); });
     screens[id].classList.remove('hidden');
     currentScreen = id;
-    syncMotion();     // attach motion for the Debug screen; detach on leave (if stopped)
     if (id === 'settings') renderSettings();
     if (id === 'debug') renderDebug();
     if (id === 'home') applyMinimized(); else focusFirst();
@@ -452,9 +442,11 @@
     document.querySelectorAll('.screen').forEach(function (s) { if (s.id) screens[s.id] = s; });
     load();
     setupEvents();
+    setupMotion();        // always-on accelerometer capture (independent of the UI)
     render();
-    navigate('home');     // also runs syncMotion() for the initial screen
+    navigate('home');
     primePermissions();   // ask for motion + location as soon as the app loads
+    if (state.running) { ensureMotionPermission(); startGeo(); }   // auto-resume after an unexpected reload
     setInterval(function () { if (currentScreen === 'debug') renderDebug(); }, 300);
     if (location.search.indexOf('debug') !== -1) setupTestHooks();
   }
